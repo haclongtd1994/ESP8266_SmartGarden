@@ -16,6 +16,8 @@
   MIT license, all text above must be included in any redistribution
  ****************************************************/
 #include <ESP8266WiFi.h>
+#include <EEPROM.h>
+#include <ESP8266httpUpdate.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include "Adafruit_MQTT.h"
@@ -39,10 +41,24 @@ const long utcOffsetInSeconds = 25200;
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org", utcOffsetInSeconds);
 
+
+/************************* EEPROM *********************************/
+#define EPPROM_SIZE   24
+// data epprom
+struct { 
+  uint control = 0;
+  uint manual_set = 0;
+  uint hour_start = 0;
+  uint min_start = 0;
+  uint hour_stop = 0;
+  uint min_stop = 0;
+} data_eep;
+
 /************ Global State (you don't need to change this!) ******************/
 
 // Create an ESP8266 WiFiClient class to connect to the MQTT server.
 WiFiClient client;
+WiFiClient client2;
 // or... use WiFiClientSecure for SSL
 //WiFiClientSecure client;
 
@@ -58,12 +74,12 @@ Adafruit_MQTT_Publish MultiTextReport = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAM
 
 // Setup a feed called 'onoff' for subscribing to changes.
 Adafruit_MQTT_Subscribe onoffbutton_man = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/onoffbutton_man");
-
 Adafruit_MQTT_Subscribe onoffbutton = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/Socket_1");
 Adafruit_MQTT_Subscribe adjuststartvalue_h = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/adjuststart_value_h");
 Adafruit_MQTT_Subscribe adjuststartvalue_m = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/adjuststart_value_m");
 Adafruit_MQTT_Subscribe adjuststopvalue_h = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/adjuststop_value_h");
 Adafruit_MQTT_Subscribe adjuststopvalue_m = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/adjuststop_value_m");
+Adafruit_MQTT_Subscribe servername_selection = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/webserver");
 
 /*************************** Sketch Code ************************************/
 
@@ -82,9 +98,13 @@ String AdjStopValueString_h = "9";
 String AdjStopValueString_m = "40";
 volatile uint32_t x=0;
 
+char server[200] = "http://hollow-yells.000webhostapp.com";
+#define FW_VISION "1_0_1" //phiên bản của code
+
 char buffer [5000] = {0};
 int cx;
 int ind = 0;
+
 
 /*************************** Setup Code ************************************/
 void setup() {
@@ -93,12 +113,14 @@ void setup() {
   Serial.println();
 
   Serial.println(F("Adafruit MQTT Smart Garden"));
-  cx = snprintf ( buffer + ind, 5000, "Adafruit MQTT Smart Garden\n");
+  cx = snprintf ( buffer + ind, 5000, "Adafruit MQTT Smart Garden\nCode version: %s\n", FW_VISION);
 
+  // Initial GPIO & EEPROM
   pinMode(0, OUTPUT);
   pinMode(2, OUTPUT);
   digitalWrite(0,HIGH);
   digitalWrite(2,HIGH);
+  EEPROM.begin(200);
 
   // Connect to WiFi access point.
   Serial.println();
@@ -130,6 +152,10 @@ void setup() {
   mqtt.subscribe(&adjuststartvalue_m);
   mqtt.subscribe(&adjuststopvalue_h);
   mqtt.subscribe(&adjuststopvalue_m);
+  mqtt.subscribe(&servername_selection);
+
+  // EEPROM setup
+  EEPROM.begin(EPPROM_SIZE);
 }
 
 /*************************** Loop Code ************************************/
@@ -140,10 +166,41 @@ void loop() {
   static bool IsUpdated_b = false;
   static bool IsON_b = false;
   static bool firsttime = true;
+  
   MQTT_connect();
   timeClient.update();
 
   if (firsttime){
+    // ESP information
+    ind += cx;
+    cx = snprintf ( buffer + ind, 5000-ind, "Chip ID: %8.x\nChip Real Size: %u\nChip Size: %u\n", 
+                    ESP.getFlashChipId(), ESP.getFlashChipRealSize(), ESP.getFlashChipSize());
+    
+    // EEPROM read
+    EEPROM.get(0, data_eep);
+    Serial.println("Automation Mode(0:ON, 1:OFF):" + String(data_eep.control) + 
+                    "\nTurn On/Off: " + String(data_eep.manual_set) + 
+                    "\nHour Start: " +    String(data_eep.hour_start) + "\nMin Start: "+ String(data_eep.min_start) +
+                    "\nHour Stop: "  +    String(data_eep.hour_stop)  + "\nMin Stop: " + String(data_eep.min_stop) );
+    if (data_eep.control) 
+      Automate_Flag = (uint32_t) data_eep.control;
+    if (data_eep.manual_set)
+      Manual_Set = (uint32_t) data_eep.manual_set;
+    if (data_eep.hour_start)
+      AdjStartValueString_h = String(data_eep.hour_start);
+    if (data_eep.min_start)
+      AdjStartValueString_m = String(data_eep.min_start);
+    if (data_eep.hour_stop)
+      AdjStopValueString_h = String(data_eep.hour_stop);
+    if (data_eep.min_stop)
+      AdjStopValueString_m = String(data_eep.min_stop);
+    if (data_eep.control || data_eep.manual_set || data_eep.hour_start || data_eep.min_start || data_eep.hour_stop || data_eep.min_stop)
+      IsUpdated_b = true;
+    
+    Serial.println("Stored data here --- Automation Mode(0:ON, 1:OFF):" + String(Automate_Flag) + 
+                    "\nTurn On/Off: " + String(Manual_Set) + 
+                    "\nHour Start: " +    String(AdjStartValueString_h) + "\nMin Start: "+ String(AdjStartValueString_m) +
+                    "\nHour Stop: "  +    String(AdjStopValueString_h)  + "\nMin Stop: " + String(AdjStopValueString_m) );
     Publish_Log();
     firsttime = false;
   }
@@ -161,10 +218,12 @@ void loop() {
       if (atoi((char *)onoffbutton.lastread) == 0)
       {
         Automate_Flag = 1;
+        data_eep.control = 1;
       }
       else
       {
         Automate_Flag = 0;
+        data_eep.control = 0;
       }
     }
     if (subscription == &adjuststartvalue_h)
@@ -172,44 +231,73 @@ void loop() {
       Serial.print(F("Hour Start: "));
       AdjStartValueString_h = String((char *)adjuststartvalue_h.lastread);
       Serial.println(AdjStartValueString_h);
-      ind += cx;
-      cx = snprintf ( buffer + ind, 5000-ind, "Hour Start: %u\n", *adjuststartvalue_h.lastread);
+      data_eep.hour_start = (int)AdjStartValueString_h.toInt();
     }
     if (subscription == &adjuststartvalue_m)
     {
       Serial.print(F("Min Start: "));
       AdjStartValueString_m = String((char *)adjuststartvalue_m.lastread);
       Serial.println(AdjStartValueString_m);
-      ind += cx;
-      cx = snprintf ( buffer + ind, 5000-ind, "Min Start: %u\n", *adjuststartvalue_m.lastread);
+      data_eep.min_start = (int)AdjStartValueString_m.toInt();
     }
     if (subscription == &adjuststopvalue_h)
     {
       Serial.print(F("Hour Stop: "));
       AdjStopValueString_h = String((char *)adjuststopvalue_h.lastread);
       Serial.println(AdjStopValueString_h);
-      ind += cx;
-      cx = snprintf ( buffer + ind, 5000-ind, "Hour Stop: %u\n", *adjuststopvalue_h.lastread);
+      data_eep.hour_stop = (int)AdjStopValueString_h.toInt();
     }
     if (subscription == &adjuststopvalue_m)
     {
       Serial.print(F("Min Stop: "));
       AdjStopValueString_m = String((char *)adjuststopvalue_m.lastread);
       Serial.println(AdjStopValueString_m);
+      data_eep.min_stop = (int)AdjStopValueString_m.toInt();
+    }
+    if (subscription == & servername_selection)
+    {
+      // Check the updating from webserver
       ind += cx;
-      cx = snprintf ( buffer + ind, 5000-ind, "Min Stop: %u\n", *adjuststopvalue_m.lastread);
+      cx = snprintf ( buffer + ind, 5000-ind, "ServerName: %s\n", String((char *)servername_selection.lastread));
+      t_httpUpdate_return ret = ESPhttpUpdate.update(client2, String((char *)servername_selection.lastread), FW_VISION);
+      switch (ret) 
+      {
+        case HTTP_UPDATE_FAILED:
+          Serial.printf("HTTP_UPDATE_FAILD Error (%d): %s", ESPhttpUpdate.getLastError(),
+                        ESPhttpUpdate.getLastErrorString().c_str());
+          ind += cx;
+          cx = snprintf ( buffer + ind, 5000-ind, "HTTP_UPDATE_FAILD Error (%d): %s\n", ESPhttpUpdate.getLastError(),
+                        ESPhttpUpdate.getLastErrorString().c_str());
+          Publish_Log();
+          break;
+        case HTTP_UPDATE_NO_UPDATES:
+          Serial.println("HTTP_UPDATE_NO_UPDATES");
+          ind += cx;
+          cx = snprintf ( buffer + ind, 5000-ind, "HTTP_UPDATE_NO_UPDATES\n");
+          Publish_Log();
+          break;
+        case HTTP_UPDATE_OK:
+          Serial.println("HTTP_UPDATE_OK");
+          ind += cx;
+          cx = snprintf ( buffer + ind, 5000-ind, "HTTP_UPDATE_OK - FOTA is running .... \n");
+          Publish_Log();
+          break;
+      }
     }
 
     if (subscription == &onoffbutton_man)
     {
       Serial.print(F("Manual value: "));
       Serial.println((char *)onoffbutton_man.lastread);
+
       if (atoi((char *)onoffbutton_man.lastread) == 0)
       {
         Manual_Set = 1;
+        data_eep.manual_set = 1;
       }
       else
       {
+        data_eep.manual_set = 0;
         Manual_Set = 0;
       }
     }
@@ -274,6 +362,8 @@ void loop() {
       }
     }
     Publish_Log();
+    EEPROM.put(0, data_eep);
+    EEPROM.commit();
   }
 
   if (!IsON_b){
