@@ -45,7 +45,7 @@ NTPClient timeClient(ntpUDP, "pool.ntp.org", utcOffsetInSeconds);
 /************************* EEPROM *********************************/
 #define EPPROM_SIZE   24
 // data epprom
-struct { 
+struct {
   uint control = 0;
   uint manual_set = 0;
   uint hour_start = 0;
@@ -99,7 +99,7 @@ String AdjStopValueString_m = "40";
 volatile uint32_t x=0;
 
 char server[200] = "http://hollow-yells.000webhostapp.com";
-#define FW_VISION "1_0_1" //phiên bản của code
+#define FW_VISION "1_0_0" //phiên bản của code
 
 char buffer [5000] = {0};
 int cx;
@@ -166,23 +166,23 @@ void loop() {
   static bool IsUpdated_b = false;
   static bool IsON_b = false;
   static bool firsttime = true;
-  
+
   MQTT_connect();
   timeClient.update();
 
   if (firsttime){
     // ESP information
     ind += cx;
-    cx = snprintf ( buffer + ind, 5000-ind, "Chip ID: %8.x\nChip Real Size: %u\nChip Size: %u\n", 
+    cx = snprintf ( buffer + ind, 5000-ind, "Chip ID: %8.x\nChip Real Size: %u\nChip Size: %u\n",
                     ESP.getFlashChipId(), ESP.getFlashChipRealSize(), ESP.getFlashChipSize());
-    
+
     // EEPROM read
     EEPROM.get(0, data_eep);
-    Serial.println("Automation Mode(0:ON, 1:OFF):" + String(data_eep.control) + 
-                    "\nTurn On/Off: " + String(data_eep.manual_set) + 
+    Serial.println("Automation Mode(0:ON, 1:OFF):" + String(data_eep.control) +
+                    "\nTurn On/Off: " + String(data_eep.manual_set) +
                     "\nHour Start: " +    String(data_eep.hour_start) + "\nMin Start: "+ String(data_eep.min_start) +
                     "\nHour Stop: "  +    String(data_eep.hour_stop)  + "\nMin Stop: " + String(data_eep.min_stop) );
-    if (data_eep.control) 
+    if (data_eep.control)
       Automate_Flag = (uint32_t) data_eep.control;
     if (data_eep.manual_set)
       Manual_Set = (uint32_t) data_eep.manual_set;
@@ -196,9 +196,9 @@ void loop() {
       AdjStopValueString_m = String(data_eep.min_stop);
     if (data_eep.control || data_eep.manual_set || data_eep.hour_start || data_eep.min_start || data_eep.hour_stop || data_eep.min_stop)
       IsUpdated_b = true;
-    
-    Serial.println("Stored data here --- Automation Mode(0:ON, 1:OFF):" + String(Automate_Flag) + 
-                    "\nTurn On/Off: " + String(Manual_Set) + 
+
+    Serial.println("Stored data here --- Automation Mode(0:ON, 1:OFF):" + String(Automate_Flag) +
+                    "\nTurn On/Off: " + String(Manual_Set) +
                     "\nHour Start: " +    String(AdjStartValueString_h) + "\nMin Start: "+ String(AdjStartValueString_m) +
                     "\nHour Stop: "  +    String(AdjStopValueString_h)  + "\nMin Stop: " + String(AdjStopValueString_m) );
     Publish_Log();
@@ -260,7 +260,7 @@ void loop() {
       ind += cx;
       cx = snprintf ( buffer + ind, 5000-ind, "ServerName: %s\n", String((char *)servername_selection.lastread));
       t_httpUpdate_return ret = ESPhttpUpdate.update(client2, String((char *)servername_selection.lastread), FW_VISION);
-      switch (ret) 
+      switch (ret)
       {
         case HTTP_UPDATE_FAILED:
           Serial.printf("HTTP_UPDATE_FAILD Error (%d): %s", ESPhttpUpdate.getLastError(),
